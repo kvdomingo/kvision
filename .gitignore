@@ -1,5 +1,11 @@
 # Datasets
 data/
+data
+
+# Large files
+*.h5
+*.hdf5
+*.model
 
 # IDE config
 .idea/
