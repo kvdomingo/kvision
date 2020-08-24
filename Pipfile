@@ -1,0 +1,23 @@
+[[source]]
+name = "pypi"
+url = "https://pypi.org/simple"
+verify_ssl = true
+
+[dev-packages]
+
+[packages]
+numpy = "*"
+matplotlib = "*"
+seaborn = "*"
+pandas = "*"
+scikit-learn = "*"
+jupyter = "*"
+notebook = "*"
+keras = "*"
+tensorflow = "*"
+jupyter-contrib-nbextensions = "*"
+autopep8 = "*"
+opencv-python = "*"
+
+[requires]
+python_version = "3.7"
