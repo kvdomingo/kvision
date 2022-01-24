@@ -1,0 +1,7 @@
+loguru
+numpy
+pandas
+Pillow
+python-dotenv
+scikit-learn
+tensorflow
