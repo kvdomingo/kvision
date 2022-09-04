@@ -1,21 +1,36 @@
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+from loguru import logger
 
-_dataset_path = os.environ.get("DATASET_PATH")
-
-if not _dataset_path:
-    raise ValueError("Environment variables are misconfigured.")
+load_dotenv()
 
 
-DATASET_PATH: Path = Path(_dataset_path).resolve()
+def load_env(name: str) -> str:
+    _env = os.environ.get(name)
+    if not _env:
+        raise ValueError(f"Missing env {name}")
+    return _env
 
-ENV: str = os.environ.get("PYTHON_ENV", "production")
 
-IMAGE_HEIGHT: int = 224
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
-IMAGE_WIDTH: int = 224
+os.environ.setdefault("TF_XLA_FLAGS", "--tf_xla_enable_xla_devices")
 
-IMAGE_CHANNELS: int = 3
+BASE_DIR = Path(__file__).resolve().parent.parent
 
-BATCH_SIZE = 128
+DATASET_PATH = Path(load_env("DATASET_PATH")).resolve()
+
+ENV = os.environ.get("PYTHON_ENV", "production")
+
+IMAGE_HEIGHT = os.environ.get("KV_IMAGE_HEIGHT", 256)
+
+IMAGE_WIDTH = os.environ.get("KV_IMAGE_WIDTH", 256)
+
+IMAGE_CHANNELS = os.environ.get("KV_IMAGE_CHANNELS", 3)
+
+BATCH_SIZE = os.environ.get("KV_BATCH_SIZE", 128)
+
+if BATCH_SIZE % 16 != 0:
+    logger.warning(f"{BATCH_SIZE} is not divisible by 16; Tensor Cores will not be used")
