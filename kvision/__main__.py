@@ -1,18 +1,19 @@
 import csv
 import logging
 import os
+import sys
 
 import tensorflow as tf
 from keras import Model, mixed_precision
 from keras.callbacks import (
     Callback,
     CSVLogger,
+    EarlyStopping,
     History,
     ModelCheckpoint,
     ReduceLROnPlateau,
     TerminateOnNaN,
 )
-from keras.initializers.initializers_v2 import RandomNormal, Zeros
 from keras.layers import (
     Conv2D,
     Dense,
@@ -22,24 +23,16 @@ from keras.layers import (
     RandomFlip,
     RandomRotation,
     RandomZoom,
-    Rescaling,
 )
 from keras.losses import Loss, SparseCategoricalCrossentropy
 from keras.models import Sequential
-from keras.optimizers import SGD, Optimizer
+from keras.optimizers import Optimizer
 from keras.utils import image_dataset_from_directory
 from loguru import logger
 from matplotlib import pyplot as plt
 from tensorflow_addons.callbacks import TQDMProgressBar
 
-from .config import (
-    BASE_DIR,
-    BATCH_SIZE,
-    DATASET_PATH,
-    IMAGE_CHANNELS,
-    IMAGE_HEIGHT,
-    IMAGE_WIDTH,
-)
+from .config import BASE_DIR, BATCH_SIZE, IMAGE_CHANNELS, IMAGE_HEIGHT, IMAGE_WIDTH
 
 
 @logger.catch()
@@ -49,7 +42,7 @@ class KVision:
         logger_ = tf.get_logger()
         logger_.setLevel(logging.DEBUG)
         mixed_precision.set_global_policy(mixed_precision.Policy("mixed_float16"))
-        print(tf.config.experimental.list_physical_devices())
+        print(*tf.config.experimental.list_physical_devices(), sep="\n")
         plt.style.use("seaborn")
 
         self.image_height: int = IMAGE_HEIGHT
@@ -57,14 +50,14 @@ class KVision:
         self.image_channels: int = IMAGE_CHANNELS
         self.batch_size: int = BATCH_SIZE
         self.seed = 314
-        self.epochs = 100
+        self.epochs = 200
         self.class_names: list[str] = []
         self.num_classes = 0
 
     def load_data(self) -> tuple[tf.data.Dataset, tf.data.Dataset]:
         ds = [
             image_dataset_from_directory(
-                DATASET_PATH,
+                BASE_DIR / "data",
                 validation_split=0.2,
                 subset=subset,
                 seed=self.seed,
@@ -81,61 +74,33 @@ class KVision:
         return train_ds, val_ds
 
     @staticmethod
-    def Conv2D_(filters: int, kernel_size: int, strides: int = 1, name: str = None, *args, **kwargs):
-        return Conv2D(
-            filters=filters,
-            kernel_size=kernel_size,
-            strides=strides,
-            name=name,
-            activation="relu",
-            use_bias=True,
-            bias_initializer=Zeros(),
-            kernel_initializer=RandomNormal(mean=0, stddev=1e-2),
-            *args,
-            **kwargs,
-        )
-
-    @staticmethod
-    def Dense_(units: int, name: str = None, relu=False, *args, **kwargs):
-        return Dense(
-            units=units,
-            name=name,
-            activation="relu" if relu else None,
-            use_bias=True,
-            bias_initializer=Zeros(),
-            kernel_initializer=RandomNormal(mean=0, stddev=1e-2),
-            *args,
-            **kwargs,
-        )
-
-    def get_model(self) -> Model:
-        Augmentation = lambda: Sequential(
+    def Augmentation():
+        return Sequential(
             [
-                RandomFlip("horizontal"),
-                RandomRotation(0.1),
-                RandomZoom(0.1),
+                RandomRotation(factor=0.1),
+                RandomZoom(height_factor=0.1, width_factor=0.1),
+                RandomFlip(mode="horizontal"),
             ],
             name="augmentation",
         )
 
+    @staticmethod
+    def ConvNet():
+        conv_layers = []
+        for i, f in enumerate([16, 32, 64, 128]):
+            conv_layers.append(Conv2D(filters=f, kernel_size=3, activation="relu", name=f"conv{i + 1}"))
+            conv_layers.append(MaxPooling2D(pool_size=3, strides=2, name=f"pool{i + 1}"))
+        return conv_layers
+
+    def get_model(self) -> Model:
         model = Sequential(
             [
-                Augmentation(),
-                Rescaling(scale=1 / 255, name="rescale"),
-                self.Conv2D_(filters=96, kernel_size=7, strides=2, name="conv1"),
-                MaxPooling2D(pool_size=3, strides=2, name="pool1"),
-                self.Conv2D_(filters=256, kernel_size=5, strides=2, name="conv2"),
-                MaxPooling2D(pool_size=3, strides=2, name="pool2"),
-                self.Conv2D_(filters=384, kernel_size=3, name="conv3"),
-                self.Conv2D_(filters=384, kernel_size=3, name="conv4"),
-                self.Conv2D_(filters=256, kernel_size=3, name="conv5"),
-                MaxPooling2D(pool_size=3, strides=2, name="pool3"),
+                self.Augmentation(),
+                *self.ConvNet(),
                 Flatten(name="flatten"),
-                self.Dense_(4096, relu=True, name="fc1"),
                 Dropout(0.5),
-                self.Dense_(4096, relu=True, name="fc2"),
-                Dropout(0.5),
-                self.Dense_(self.num_classes, name="output"),
+                Dense(units=512, activation="relu", name="fc1"),
+                Dense(self.num_classes, name="output"),
             ],
             name="kvision-0.1.0",
         )
@@ -160,6 +125,13 @@ class KVision:
         )
         terminate_nan = TerminateOnNaN()
         reduce_lr = ReduceLROnPlateau(monitor="val_loss", factor=0.1)
+        early_stop = EarlyStopping(
+            monitor="val_loss",
+            min_delta=1e-5,
+            patience=10,
+            verbose=0,
+            restore_best_weights=True,
+        )
         return [
             history,
             tqdm,
@@ -167,11 +139,12 @@ class KVision:
             csv_logger,
             terminate_nan,
             reduce_lr,
+            early_stop,
         ]
 
     @staticmethod
     def get_optimizer() -> Optimizer | str:
-        return SGD(learning_rate=1e-2, momentum=0.9)
+        return "adagrad"
 
     @staticmethod
     def get_loss() -> Loss | str:
@@ -186,6 +159,8 @@ class KVision:
         )
         model.build(input_shape=(None, self.image_height, self.image_width, self.image_channels))
         model.summary()
+        if str(input("Proceed? ([y]/n) ")).lower().strip() == "n":
+            sys.exit(1)
         return model
 
     @staticmethod
