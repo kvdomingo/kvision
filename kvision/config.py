@@ -26,9 +26,9 @@ GDRIVE_DATASET_PATH = Path(load_env("DRIVE_DATASET_PATH")).resolve()
 
 ENV = os.environ.get("PYTHON_ENV", "production")
 
-IMAGE_HEIGHT = os.environ.get("KV_IMAGE_HEIGHT", 224)
+IMAGE_HEIGHT = os.environ.get("KV_IMAGE_HEIGHT", 299)
 
-IMAGE_WIDTH = os.environ.get("KV_IMAGE_WIDTH", 224)
+IMAGE_WIDTH = os.environ.get("KV_IMAGE_WIDTH", 299)
 
 IMAGE_CHANNELS = os.environ.get("KV_IMAGE_CHANNELS", 3)
 

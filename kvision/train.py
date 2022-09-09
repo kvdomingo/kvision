@@ -1,10 +1,10 @@
-import csv
 import logging
 import os
 import sys
 
 import tensorflow as tf
 from keras import Model, mixed_precision
+from keras.applications.inception_resnet_v2 import InceptionResNetV2
 from keras.callbacks import (
     Callback,
     CSVLogger,
@@ -30,6 +30,7 @@ from keras.optimizers import Optimizer
 from keras.utils import image_dataset_from_directory
 from loguru import logger
 from matplotlib import pyplot as plt
+from numpy import array
 from tensorflow_addons.callbacks import TQDMProgressBar
 
 from .config import BASE_DIR, BATCH_SIZE, IMAGE_CHANNELS, IMAGE_HEIGHT, IMAGE_WIDTH
@@ -37,6 +38,12 @@ from .config import BASE_DIR, BATCH_SIZE, IMAGE_CHANNELS, IMAGE_HEIGHT, IMAGE_WI
 
 @logger.catch()
 class KVision:
+    model: Model
+    history: History
+    validation_dataset: tf.data.Dataset
+    class_names: list[str]
+    num_classes: int
+
     def __init__(self):
         os.makedirs(BASE_DIR / "kvision" / "run", exist_ok=True)
         logger_ = tf.get_logger()
@@ -50,11 +57,9 @@ class KVision:
         self.image_channels: int = IMAGE_CHANNELS
         self.batch_size: int = BATCH_SIZE
         self.seed = 314
-        self.epochs = 200
-        self.class_names: list[str] = []
-        self.num_classes = 0
+        self.epochs = 100
 
-    def load_data(self) -> tuple[tf.data.Dataset, tf.data.Dataset]:
+    def load_data(self, training: bool = True) -> tuple[tf.data.Dataset | None, tf.data.Dataset | None]:
         ds = [
             image_dataset_from_directory(
                 BASE_DIR / "data",
@@ -67,8 +72,11 @@ class KVision:
             for subset in ["training", "validation"]
         ]
         train_ds, val_ds = ds
+        self.validation_dataset = val_ds
         self.class_names = train_ds.class_names
         self.num_classes = len(self.class_names)
+        if not training:
+            return None, None
         train_ds = train_ds.cache().shuffle(1000).prefetch(buffer_size=tf.data.AUTOTUNE)
         val_ds = val_ds.cache().prefetch(buffer_size=tf.data.AUTOTUNE)
         return train_ds, val_ds
@@ -96,9 +104,9 @@ class KVision:
         model = Sequential(
             [
                 self.Augmentation(),
-                *self.ConvNet(),
+                InceptionResNetV2(include_top=False, weights="imagenet"),
                 Flatten(name="flatten"),
-                Dropout(0.5),
+                Dropout(0.2),
                 Dense(units=512, activation="relu", name="fc1"),
                 Dense(self.num_classes, name="output"),
             ],
@@ -124,11 +132,11 @@ class KVision:
             append=False,
         )
         terminate_nan = TerminateOnNaN()
-        reduce_lr = ReduceLROnPlateau(monitor="val_loss", factor=0.1)
+        reduce_lr = ReduceLROnPlateau(monitor="val_loss", factor=0.1, patience=10)
         early_stop = EarlyStopping(
             monitor="val_loss",
             min_delta=1e-5,
-            patience=10,
+            patience=15,
             verbose=0,
             restore_best_weights=True,
         )
@@ -150,7 +158,7 @@ class KVision:
     def get_loss() -> Loss | str:
         return SparseCategoricalCrossentropy(from_logits=True)
 
-    def initialize_model(self) -> Model:
+    def initialize_model(self, training: bool = True):
         model = self.get_model()
         model.compile(
             optimizer=self.get_optimizer(),
@@ -158,13 +166,19 @@ class KVision:
             metrics=["accuracy"],
         )
         model.build(input_shape=(None, self.image_height, self.image_width, self.image_channels))
+        self.model = model
+        if not training:
+            return
         model.summary()
         if str(input("Proceed? ([y]/n) ")).lower().strip() == "n":
             sys.exit(1)
-        return model
 
-    @staticmethod
-    def save_metric_graphs(epochs: list[int], metrics: dict[str, list[float]]):
+    def save_metric_graphs(self, epochs: list[int] = None, metrics: dict[str, list[float]] = None):
+        if epochs is None:
+            epochs = self.history.epoch
+        if metrics is None:
+            metrics = self.history.history
+        epochs = array(epochs, dtype="uint8")
         plt.plot(epochs, metrics["loss"], label="train")
         plt.plot(epochs, metrics["val_loss"], label="val")
         plt.ylabel("loss")
@@ -179,42 +193,22 @@ class KVision:
         plt.savefig(BASE_DIR / "kvision" / "run" / "accuracy.png", bbox_inches="tight", dpi=144)
         plt.close("all")
 
-    @staticmethod
-    def evaluate_model(model: Model, val_ds: tf.data.Dataset):
-        eva = model.evaluate(val_ds.take(1))
+    def evaluate_model(self, val_ds: tf.data.Dataset = None):
+        if val_ds is None:
+            val_ds = self.validation_dataset
+        eva = self.model.evaluate(val_ds.take(1))
         logger.info(f"Loss: {eva[0]}, Accuracy: {eva[1] * 100}%")
 
     def __call__(self):
         train_ds, val_ds = self.load_data()
-        model = self.initialize_model()
+        self.initialize_model()
         callbacks = self.get_callbacks()
-        try:
-            history = model.fit(
-                train_ds,
-                validation_data=val_ds,
-                epochs=self.epochs,
-                callbacks=callbacks,
-                verbose=0,
-            )
-        except KeyboardInterrupt:
-            model.save(BASE_DIR / "kvision" / "run" / "kvision-0.1.0-model")
-            with open(BASE_DIR / "kvision" / "run" / "training.csv", "r") as f:
-                reader = csv.DictReader(f)
-                epochs = [r["epoch"] for r in reader]
-                metrics = {
-                    "loss": [],
-                    "val_loss": [],
-                    "accuracy": [],
-                    "val_accuracy": [],
-                }
-                for row in reader:
-                    for k in metrics.keys():
-                        metrics[k].append(row[k])
-            self.save_metric_graphs(epochs, metrics)
-        else:
-            self.save_metric_graphs(history.epoch, history.history)
-            self.evaluate_model(model, val_ds)
-
-
-if __name__ == "__main__":
-    KVision()()
+        self.history = self.model.fit(
+            train_ds,
+            validation_data=val_ds,
+            epochs=self.epochs,
+            callbacks=callbacks,
+            verbose=0,
+        )
+        self.save_metric_graphs()
+        self.evaluate_model()
