@@ -24,6 +24,8 @@ DATASET_PATH = Path(load_env("DATASET_PATH")).resolve()
 
 GDRIVE_DATASET_PATH = Path(load_env("DRIVE_DATASET_PATH")).resolve()
 
+TENSORBOARD_LOG_DIR = Path(load_env("TENSORBOARD_LOG_DIR"))
+
 ENV = os.environ.get("PYTHON_ENV", "production")
 
 IMAGE_HEIGHT = os.environ.get("KV_IMAGE_HEIGHT", 299)

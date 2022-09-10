@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+from datetime import datetime
 
 import tensorflow as tf
 from keras import Model, mixed_precision
@@ -12,21 +13,20 @@ from keras.callbacks import (
     History,
     ModelCheckpoint,
     ReduceLROnPlateau,
+    TensorBoard,
     TerminateOnNaN,
 )
 from keras.layers import (
-    Conv2D,
     Dense,
-    Dropout,
-    Flatten,
-    MaxPooling2D,
+    GlobalAveragePooling2D,
+    Input,
     RandomFlip,
     RandomRotation,
     RandomZoom,
 )
 from keras.losses import Loss, SparseCategoricalCrossentropy
 from keras.models import Sequential
-from keras.optimizers import Optimizer
+from keras.optimizers import Adagrad, Optimizer
 from keras.utils import image_dataset_from_directory
 from loguru import logger
 from matplotlib import pyplot as plt
@@ -75,10 +75,9 @@ class KVision:
         self.validation_dataset = val_ds
         self.class_names = train_ds.class_names
         self.num_classes = len(self.class_names)
-        if not training:
-            return None, None
-        train_ds = train_ds.cache().shuffle(1000).prefetch(buffer_size=tf.data.AUTOTUNE)
-        val_ds = val_ds.cache().prefetch(buffer_size=tf.data.AUTOTUNE)
+        if training:
+            train_ds = train_ds.cache().shuffle(1000).prefetch(buffer_size=tf.data.AUTOTUNE)
+            val_ds = val_ds.cache().prefetch(buffer_size=tf.data.AUTOTUNE)
         return train_ds, val_ds
 
     @staticmethod
@@ -92,26 +91,21 @@ class KVision:
             name="augmentation",
         )
 
-    @staticmethod
-    def ConvNet():
-        conv_layers = []
-        for i, f in enumerate([16, 32, 64, 128]):
-            conv_layers.append(Conv2D(filters=f, kernel_size=3, activation="relu", name=f"conv{i + 1}"))
-            conv_layers.append(MaxPooling2D(pool_size=3, strides=2, name=f"pool{i + 1}"))
-        return conv_layers
+    def get_model(self, training: bool = True) -> Model:
+        inception = InceptionResNetV2(include_top=False, weights="imagenet")
+        for i in range(len(inception.layers)):
+            inception.layers[i].trainable = i > 100
 
-    def get_model(self) -> Model:
-        model = Sequential(
-            [
-                self.Augmentation(),
-                InceptionResNetV2(include_top=False, weights="imagenet"),
-                Flatten(name="flatten"),
-                Dropout(0.2),
-                Dense(units=512, activation="relu", name="fc1"),
-                Dense(self.num_classes, name="output"),
-            ],
-            name="kvision-0.1.0",
-        )
+        layers = [
+            Input(shape=(self.image_height, self.image_width, self.image_channels)),
+            inception,
+            GlobalAveragePooling2D(name="avg_pool"),
+            Dense(units=512, activation="relu", name="fc1"),
+            Dense(self.num_classes, name="output"),
+        ]
+        if training:
+            layers.insert(1, self.Augmentation())
+        model = Sequential(layers, name="kvision-0.1.0")
         return model
 
     @staticmethod
@@ -140,6 +134,9 @@ class KVision:
             verbose=0,
             restore_best_weights=True,
         )
+        tensorboard = TensorBoard(
+            log_dir=BASE_DIR / "kvision" / "run" / "tb_logs" / datetime.now().strftime("%Y-%m-%d %H%MH")
+        )
         return [
             history,
             tqdm,
@@ -148,18 +145,19 @@ class KVision:
             terminate_nan,
             reduce_lr,
             early_stop,
+            tensorboard,
         ]
 
     @staticmethod
     def get_optimizer() -> Optimizer | str:
-        return "adagrad"
+        return Adagrad(learning_rate=0.1)
 
     @staticmethod
     def get_loss() -> Loss | str:
         return SparseCategoricalCrossentropy(from_logits=True)
 
     def initialize_model(self, training: bool = True):
-        model = self.get_model()
+        model = self.get_model(training)
         model.compile(
             optimizer=self.get_optimizer(),
             loss=self.get_loss(),

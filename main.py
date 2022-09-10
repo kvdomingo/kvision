@@ -52,5 +52,12 @@ def predict(filename: str):
     predict(Path(filename).resolve())
 
 
+@cli.command()
+def predict_batch():
+    from kvision.predict import predict_batch
+
+    predict_batch()
+
+
 if __name__ == "__main__":
     cli()
